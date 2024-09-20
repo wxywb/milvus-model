@@ -80,6 +80,21 @@ class BM25EmbeddingFunction(BaseEmbeddingFunction):
         self.avgdl = total_word_count / self.corpus_size
         return term_document_frequencies
 
+    def _compute_batch_statistics(self, corpus: List[str]):
+        term_document_frequencies = defaultdict(int)
+        batch_word_count = 0
+        for document in corpus:
+            batch_word_count += len(document)
+
+            frequencies = defaultdict(int)
+            for word in document:
+                frequencies[word] += 1
+
+            for word, _ in frequencies.items():
+                term_document_frequencies[word] += 1
+            self.corpus_size += 1
+        return term_document_frequencies, batch_word_count
+
     def _tokenize_corpus(self, corpus: List[str]):
         if self.num_workers == 1:
             return [self.analyzer(text) for text in corpus]
@@ -124,6 +139,33 @@ class BM25EmbeddingFunction(BaseEmbeddingFunction):
 
     def fit(self, corpus: List[str]):
         self._rebuild(corpus)
+
+	def fit_iterator(self, iterator, batch_size=1024):
+	    term_document_frequencies = {}
+	    total_word_count = 0
+	    corpus_size = 0
+	    batch = []
+	
+	    def process_batch(total_word_count, batch):
+	        batch = self._tokenize_corpus(batch)
+	        batch_term_document_frequencies, batch_word_count = self._compute_batch_statistics(batch)
+	        total_word_count += batch_word_count
+	        for term, count in batch_term_document_frequencies.items():
+	            term_document_frequencies[term] = term_document_frequencies.get(term, 0) + count
+			return total_word_count
+	
+	    for doc in iterator:
+	        batch.append(doc)
+	        if len(batch) == batch_size:
+	            total_word_count = process_batch(total_word_count, batch)
+	            batch = []
+	
+	    if batch:
+	        total_word_count = process_batch(batch)
+	
+	    self._calc_idf(term_document_frequencies)
+	    self._calc_term_indices()
+	    self.avgdl = total_word_count / corpus_size
 
     def _encode_query(self, query: str) -> csr_array:
         terms = self.analyzer(query)
