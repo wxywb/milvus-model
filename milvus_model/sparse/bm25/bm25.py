@@ -35,6 +35,52 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 logger.addHandler(console_handler)
 
+class TermFrequencyCounter:
+    def __init__(self, path: Optional[str] = None):
+        self.term_frequencies = defaultdict(int)
+        self.corpus_size = 0
+        self.is_load = False
+        self.path = path
+        self.word_count = 0
+    
+    def add_document(self, words: List[str]):
+        self.corpus_size += 1
+        frequencies = defaultdict(int)
+        self.word_count += len(words)
+
+        unique_words = set(words)
+        
+        for word in unique_words:
+            self.term_frequencies[word] += 1
+
+    def get_term_frequencies(self):
+        return self.term_frequencies, self.corpus_size
+    
+    def save(self, filepath: str):
+        info = {}
+        info['corpus_size'] = self.corpus_size
+        info['tdf'] = self.term_frequencies
+        with Path(filepath).open("w") as json_file:
+            json.dump(info, json_file)
+
+    def load(self, path: Optional[str] = None):
+        if path:
+            path = self.path
+        elif path is None and self.path:
+            path = self.path
+        else:
+            raise ValueError("Path needs to be specified.")
+
+        try:
+            with Path(path).open() as json_file:
+                info = json.load(json_file)
+                self.corpus_size = info['corpus_size'] 
+                self.term_frequencies = info['tdf']
+        except OSError as e:
+            error_message = f"Error opening file {path}: {e}"
+        raise RuntimeError(error_message) from e
+        self.is_load = True
+    
 
 class BM25EmbeddingFunction(BaseEmbeddingFunction):
     def __init__(
@@ -64,21 +110,31 @@ class BM25EmbeddingFunction(BaseEmbeddingFunction):
         for index, word in enumerate(self.idf):
             self.idf[word][1] = index
 
+    #def _compute_statistics(self, corpus: List[str]):
+    #    term_document_frequencies = defaultdict(int)
+    #    total_word_count = 0
+    #    for document in corpus:
+    #        total_word_count += len(document)
+
+    #        frequencies = defaultdict(int)
+    #        for word in document:
+    #            frequencies[word] += 1
+
+    #        for word, _ in frequencies.items():
+    #            term_document_frequencies[word] += 1
+    #        self.corpus_size += 1
+    #    self.avgdl = total_word_count / self.corpus_size
+    #    return term_document_frequencies
     def _compute_statistics(self, corpus: List[str]):
-        term_document_frequencies = defaultdict(int)
+        tf_counter = TermFrequencyCounter() 
         total_word_count = 0
-        for document in corpus:
-            total_word_count += len(document)
 
-            frequencies = defaultdict(int)
-            for word in document:
-                frequencies[word] += 1
+        for docuemnt in corpus
+            tf_counter.add_document(document)
 
-            for word, _ in frequencies.items():
-                term_document_frequencies[word] += 1
-            self.corpus_size += 1
-        self.avgdl = total_word_count / self.corpus_size
-        return term_document_frequencies
+        self.corpus_size = tf_counter.corpus_size
+        self.avgdl = tf_counter.word_count / self.corpus_size
+        return tf_counter.term_frequencies
 
     def _compute_batch_statistics(self, corpus: List[str]):
         term_document_frequencies = defaultdict(int)
@@ -140,32 +196,55 @@ class BM25EmbeddingFunction(BaseEmbeddingFunction):
     def fit(self, corpus: List[str]):
         self._rebuild(corpus)
 
-	def fit_iterator(self, iterator, batch_size=1024):
-	    term_document_frequencies = {}
-	    total_word_count = 0
-	    corpus_size = 0
-	    batch = []
-	
-	    def process_batch(total_word_count, batch):
-	        batch = self._tokenize_corpus(batch)
-	        batch_term_document_frequencies, batch_word_count = self._compute_batch_statistics(batch)
-	        total_word_count += batch_word_count
-	        for term, count in batch_term_document_frequencies.items():
-	            term_document_frequencies[term] = term_document_frequencies.get(term, 0) + count
-			return total_word_count
-	
-	    for doc in iterator:
-	        batch.append(doc)
-	        if len(batch) == batch_size:
-	            total_word_count = process_batch(total_word_count, batch)
-	            batch = []
-	
-	    if batch:
-	        total_word_count = process_batch(batch)
-	
-	    self._calc_idf(term_document_frequencies)
-	    self._calc_term_indices()
-	    self.avgdl = total_word_count / corpus_size
+    def fit_iterator(self, iterator, batch_size=1024):
+        term_document_frequencies = {}
+        total_word_count = 0
+        corpus_size = 0
+        batch = []
+    
+        def process_batch(total_word_count, batch):
+            batch = self._tokenize_corpus(batch)
+            batch_term_document_frequencies, batch_word_count = self._compute_batch_statistics(batch)
+            total_word_count += batch_word_count
+            for term, count in batch_term_document_frequencies.items():
+                term_document_frequencies[term] = term_document_frequencies.get(term, 0) + count
+            return total_word_count
+    
+        for doc in iterator:
+            batch.append(doc)
+            if len(batch) == batch_size:
+                total_word_count = process_batch(total_word_count, batch)
+                batch = []
+        if batch:
+            total_word_count = process_batch(batch)
+    
+        self._calc_idf(term_document_frequencies)
+        self._calc_term_indices()
+        self.avgdl = total_word_count / corpus_size
+
+    def calculate_term_frequencies(self, corpus: List[str]) -> TermFrequencyCounter:
+        corpus = self._tokenize_corpus(corpus)
+        tf_counter = TermFrequencyCounter()
+        for document in corpus:
+            tf_counter.add_docoument(document)
+        return tf_counter
+
+
+    def build_from_tfcounters(self, counters: List[TermFrequencyCounter]):
+        self._clear()
+        term_document_frequencies = {}
+        total_word_count = 0
+        corpus_size = 0
+        for counter in counters:
+            if counter.is_load is False:
+                counter.load()
+                total_word_count += counter.word_count
+                corpus_size += counter.corpus_size
+                for word in counter.term_frequencies:
+                    term_document_frequencies[term] = term_document_frequencies.get(term, 0) + count
+        slef.calc_idf(term_document_frequencies)
+        self._calc_term_indices()
+        self.avgdl = total_word_count / corpus_size
 
     def _encode_query(self, query: str) -> csr_array:
         terms = self.analyzer(query)
